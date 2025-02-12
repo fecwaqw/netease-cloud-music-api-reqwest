@@ -1104,15 +1104,15 @@ impl MusicApi {
 
 fn choose_user_agent(ua: &str) -> &str {
     let index = if ua == "mobile" {
-        rand::random::<usize>() % 7
+        rand::random::<u16>() % 7
     } else if ua == "pc" {
-        rand::random::<usize>() % 5 + 8
+        rand::random::<u16>() % 5 + 8
     } else if !ua.is_empty() {
         return ua;
     } else {
-        rand::random::<usize>() % USER_AGENT_LIST.len()
+        rand::random::<u16>() % USER_AGENT_LIST.len() as u16
     };
-    USER_AGENT_LIST[index]
+    USER_AGENT_LIST[index as usize]
 }
 
 #[cfg(test)]
