@@ -1,9 +1,10 @@
 //
 // model.rs
 // Copyright (C) 2019 gmg137 <gmg137@live.com>
+// Copyright (C) 2026 fecwaqw <fecwaqw@126.com>
 // Distributed under terms of the GPLv3 license.
 //
-use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
@@ -52,6 +53,18 @@ impl<'a> DeVal<'a> for &'a Vec<Value> {
     fn dval(v: &'a Value) -> Result<Self> {
         match v {
             Value::Array(v) => Ok(v),
+            _ => Err(anyhow!("json not a array")),
+        }
+    }
+}
+
+impl<'a> DeVal<'a> for Vec<String> {
+    fn dval(v: &'a Value) -> Result<Self> {
+        match v {
+            Value::Array(v) => Ok(v
+                .iter()
+                .map(|s| s.as_str().unwrap_or("").to_string())
+                .collect()),
             _ => Err(anyhow!("json not a array")),
         }
     }
@@ -228,7 +241,6 @@ impl SongCopyright {
         self != &Self::Unavailable
     }
 }
-
 /// 歌曲信息
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SongInfo {
@@ -236,8 +248,10 @@ pub struct SongInfo {
     pub id: u64,
     /// 歌名
     pub name: String,
+    /// 歌名译名
+    pub translated_name: Option<String>,
     /// 歌手
-    pub singer: String,
+    pub singer: Vec<String>,
     /// 专辑
     pub album: String,
     /// 专辑 ID
@@ -248,7 +262,7 @@ pub struct SongInfo {
     pub duration: u64,
     /// 歌曲链接
     pub song_url: String,
-
+    /// 版权
     pub copyright: SongCopyright,
 }
 
@@ -276,14 +290,16 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                 }
                 for v in array.iter() {
                     let ar: &Vec<Value> = get_val!(v, "ar")?;
-
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "ar")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "al", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "al", "id")?,
                         pic_url: get_val!(v, "al", "picUrl").unwrap_or_default(),
@@ -300,7 +316,10 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "songId")?,
                         name: get_val!(v, "songName")?,
-                        singer: get_val!(v, "artist").unwrap_or_else(|_| unk.clone()),
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
+                        singer: vec![get_val!(v, "artist").unwrap_or_else(|_| unk.clone())],
                         album: get_val!(v, "album").unwrap_or_else(|_| unk.clone()),
                         album_id: 0,
                         pic_url: String::new(),
@@ -316,10 +335,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "artists")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "album", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "album", "id")?,
                         pic_url: get_val!(v, "album", "picUrl").unwrap_or_default(),
@@ -335,10 +357,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "artists")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "album", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "album", "id")?,
                         pic_url: get_val!(v, "album", "picUrl").unwrap_or_default(),
@@ -354,10 +379,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "artists")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "album", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "album", "id")?,
                         pic_url: get_val!(v, "album", "picUrl").unwrap_or_default(),
@@ -374,10 +402,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "ar")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(value, "album", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(value, "album", "id")?,
                         pic_url: get_val!(value, "album", "picUrl").unwrap_or_default(),
@@ -393,6 +424,9 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(value, "artist", "name")?,
                         album: get_val!(v, "al", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "al", "id")?,
@@ -409,10 +443,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                         singer: get_val!(@as &Vec<Value>, v, "ar")?
-                            .first()
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "al", "name").unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "al", "id")?,
                         pic_url: String::new(),
@@ -429,7 +466,10 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "mainTrackId")?,
                         name: get_val!(v, "name")?,
-                        singer: format!("第 {} 期", num),
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
+                        singer: vec![format!("第 {} 期", num)],
                         album: get_val!(@as u64, v, "createTime")?.to_string(),
                         album_id: 0,
                         pic_url: get_val!(v, "coverUrl")?,
@@ -446,10 +486,13 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "songInfo", "name")?,
-                        singer: get_val!(@as &Vec<Value>, v, "songInfo", "ar")?
-                            .first()
+                        translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                            .ok()
+                            .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
+                        singer: get_val!(@as &Vec<Value>, v, "SongInfo","ar")?
+                            .into_iter()
                             .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                            .unwrap_or_else(|| unk.clone()),
+                            .collect(),
                         album: get_val!(v, "songInfo", "al", "name")
                             .unwrap_or_else(|_| unk.clone()),
                         album_id: get_val!(v, "songInfo", "al", "id")?,
@@ -500,10 +543,13 @@ pub fn to_mix_detail(json: &Value) -> Result<PlayListDetail> {
             songs.push(SongInfo {
                 id: get_val!(v, "id")?,
                 name: get_val!(v, "name")?,
-                singer: get_val!(@as &Vec<Value>, v, "ar")?
+                translated_name: get_val!(@as &Vec<Value>, v, "tns")?
                     .first()
+                    .map(|x| x.to_string()),
+                singer: get_val!(@as &Vec<Value>, v, "ar")?
+                    .into_iter()
                     .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                    .unwrap_or_else(|| unk.clone()),
+                    .collect(),
                 album: get_val!(v, "al", "name").unwrap_or_else(|_| unk.clone()),
                 album_id: get_val!(v, "al", "id")?,
                 pic_url: get_val!(v, "al", "picUrl").unwrap_or_default(),
@@ -558,10 +604,13 @@ pub fn to_album_detail(json: &Value) -> Result<AlbumDetail> {
             songs.push(SongInfo {
                 id: get_val!(v, "id")?,
                 name: get_val!(v, "name")?,
+                translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                    .ok()
+                    .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                 singer: get_val!(@as &Vec<Value>, v, "ar")?
-                    .first()
+                    .into_iter()
                     .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
-                    .unwrap_or_else(|| unk.clone()),
+                    .collect(),
                 album: name.clone(),
                 album_id: id,
                 pic_url: pic_url.clone(),

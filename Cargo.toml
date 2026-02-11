@@ -1,12 +1,11 @@
 [package]
-name = "netease-cloud-music-api"
+name = "netease-cloud-music-api-reqwest"
 version = "1.5.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-isahc = { version = "^1", features = ["cookies"] }
 lazy_static = "*"
 regex = "*"
 urlqstring = "*"
@@ -17,6 +16,12 @@ openssl = "*"
 anyhow = "*"
 hex = "*"
 base64 = "*"
+reqwest = { version = "0.13.2", features = ["cookies"] }
+reqwest_cookie_store = "0.10.0"
+url = "2.5.8"
+cookie_store = "0.22.0"
+chrono = "0.4.43"
+cookie = "0.18.1"
 
 [dev-dependencies]
-async-std = { features = ["attributes"], version = "*" }
+tokio = { features = ["full"], version = "*" }

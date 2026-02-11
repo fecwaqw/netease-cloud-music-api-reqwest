@@ -1,25 +1,34 @@
 //
 // mod.rs
 // Copyright (C) 2019 gmg137 <gmg137@live.com>
+// Copyright (C) 2026 fecwaqw <fecwaqw@126.com>
 // Distributed under terms of the GPLv3 license.
 //
 mod encrypt;
 pub(crate) mod model;
 use anyhow::{anyhow, Result};
+use chrono::Utc;
+use cookie_store::CookieStore;
 use encrypt::Crypto;
-pub use isahc::cookies::{CookieBuilder, CookieJar};
-use isahc::{prelude::*, *};
 use lazy_static::lazy_static;
 pub use model::*;
+use rand::Rng;
 use regex::Regex;
-use std::{collections::HashMap, path::PathBuf, sync::OnceLock, time::Duration};
+use reqwest::{self, header::HeaderMap, Client};
+use reqwest_cookie_store::CookieStoreMutex;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
+use url::Url;
 use urlqstring::QueryParams;
-
 lazy_static! {
     static ref _CSRF: Regex = Regex::new(r"_csrf=(?P<csrf>[^(;|$)]+)").unwrap();
 }
 
-static BASE_URL: &str = "https://music.163.com";
+static DOMAIN: &'static str = "https://music.163.com";
+static API_DOMAIN: &'static str = "http://interface.music.163.com";
 
 const TIMEOUT: u64 = 100;
 
@@ -45,8 +54,10 @@ const USER_AGENT_LIST: [&str; 14] = [
 
 #[derive(Clone)]
 pub struct MusicApi {
-    client: HttpClient,
+    client: reqwest::Client,
+    cookie_jar: Arc<CookieStoreMutex>,
     csrf: OnceLock<String>,
+    max_cons: usize,
 }
 
 #[allow(unused)]
@@ -65,36 +76,43 @@ impl Default for MusicApi {
 impl MusicApi {
     #[allow(unused)]
     pub fn new(max_cons: usize) -> Self {
-        let client = HttpClient::builder()
+        let cookie_jar = Arc::new(CookieStoreMutex::default());
+        let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(TIMEOUT))
-            .max_connections(max_cons)
-            .cookies()
+            .pool_max_idle_per_host(max_cons)
+            .cookie_store(true)
+            .cookie_provider(cookie_jar.clone())
             .build()
             .expect("初始化网络请求失败!");
         Self {
             client,
+            cookie_jar,
             csrf: OnceLock::new(),
+            max_cons,
         }
     }
 
     #[allow(unused)]
-    pub fn from_cookie_jar(cookie_jar: CookieJar, max_cons: usize) -> Self {
-        let client = HttpClient::builder()
+    pub fn from_cookie_jar(cookie_jar: CookieStore, max_cons: usize) -> Self {
+        let cookie_jar = Arc::new(CookieStoreMutex::new(cookie_jar));
+        let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(TIMEOUT))
-            .max_connections(max_cons)
-            .cookies()
-            .cookie_jar(cookie_jar)
+            .pool_max_idle_per_host(max_cons)
+            .cookie_store(true)
+            .cookie_provider(cookie_jar.clone())
             .build()
             .expect("初始化网络请求失败!");
         Self {
             client,
+            cookie_jar,
             csrf: OnceLock::new(),
+            max_cons,
         }
     }
 
     #[allow(unused)]
-    pub fn cookie_jar(&self) -> Option<&CookieJar> {
-        self.client.cookie_jar()
+    pub fn cookie_jar(&self) -> Arc<CookieStoreMutex> {
+        self.cookie_jar.clone()
     }
 
     /// 设置使用代理
@@ -105,28 +123,27 @@ impl MusicApi {
     ///   - socks4a: SOCKS4a Proxy. Proxy resolves URL hostname.
     ///   - socks5: SOCKS5 Proxy.
     ///   - socks5h: SOCKS5 Proxy. Proxy resolves URL hostname.
-    pub fn set_proxy(&mut self, proxy: &str) -> Result<()> {
-        if let Some(cookie_jar) = self.client.cookie_jar() {
-            let client = HttpClient::builder()
-                .timeout(Duration::from_secs(TIMEOUT))
-                .proxy(Some(proxy.parse()?))
-                .cookies()
-                .cookie_jar(cookie_jar.to_owned())
-                .build()
-                .expect("初始化网络请求失败!");
-            self.client = client;
-        } else {
-            let client = HttpClient::builder()
-                .timeout(Duration::from_secs(TIMEOUT))
-                .proxy(Some(proxy.parse()?))
-                .cookies()
-                .build()
-                .expect("初始化网络请求失败!");
-            self.client = client;
-        }
+    pub fn set_proxy(&mut self, proxy: reqwest::Proxy) -> Result<()> {
+        self.client = Client::builder()
+            .proxy(proxy)
+            .timeout(Duration::from_secs(TIMEOUT))
+            .pool_max_idle_per_host(self.max_cons)
+            .cookie_store(true)
+            .cookie_provider(self.cookie_jar())
+            .build()
+            .expect("初始化网络请求失败!");
         Ok(())
     }
-
+    fn get_cookie<'a>(&self, url: &Url, name: &str) -> Option<String> {
+        let cookie = self.cookie_jar();
+        let cookie: std::sync::MutexGuard<'_, CookieStore> = cookie.lock().unwrap();
+        for (key, value) in cookie.get_request_values(url) {
+            if key == name {
+                return Some(value.to_string());
+            }
+        }
+        return None;
+    }
     /// 发送请求
     /// method: 请求方法
     /// path: 请求路径
@@ -147,75 +164,138 @@ impl MusicApi {
         let csrf = match self.csrf.get() {
             Some(str) => str.clone(),
             None => {
-                if let Some(cookies) = self.cookie_jar() {
-                    let uri = BASE_URL.parse().unwrap();
-                    if let Some(cookie) = cookies.get_by_name(&uri, "__csrf") {
-                        let str = cookie.value();
-                        if !str.is_empty() {
-                            self.csrf.get_or_init(|| str.to_string());
-                        }
-                    }
+                if let Some(str) = self.get_cookie(&DOMAIN.parse().unwrap(), "__csrf") {
+                    self.csrf.get_or_init(|| str);
                 }
                 self.csrf.get().unwrap_or(&empty).clone()
             }
         };
-        let mut url = format!("{}{}?csrf_token={}", BASE_URL, path, csrf);
-        if !append_csrf {
-            url = format!("{}{}", BASE_URL, path);
-        }
+        let mut url = String::new();
         match method {
             Method::Post => {
-                let user_agent = match cryptoapi {
-                    CryptoApi::LinuxApi => LINUX_USER_AGNET.to_string(),
-                    CryptoApi::Weapi => choose_user_agent(ua).to_string(),
-                    CryptoApi::Eapi => choose_user_agent(ua).to_string(),
-                };
-                let body = match cryptoapi {
+                let mut headers = HeaderMap::new();
+                let encrypted_data = match cryptoapi {
+                    CryptoApi::Weapi => {
+                        let mut data = HashMap::from(params);
+                        headers.append("Referer", DOMAIN.parse().unwrap());
+                        headers.append("User-Agent", choose_user_agent(ua).parse().unwrap());
+                        headers.append(
+                            "Host",
+                            Url::parse(DOMAIN)
+                                .unwrap()
+                                .host_str()
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        );
+                        if append_csrf {
+                            data.insert("csrf_token", &csrf);
+                        }
+                        url = format!("{}{}", DOMAIN, path);
+                        Crypto::weapi(&QueryParams::from(data).json())
+                    }
                     CryptoApi::LinuxApi => {
+                        headers.append("User-Agent", LINUX_USER_AGNET.parse().unwrap());
+                        headers.append(
+                            "Host",
+                            Url::parse(DOMAIN)
+                                .unwrap()
+                                .host_str()
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        );
                         let data = format!(
-                            r#"{{"method":"linuxapi","url":"{}","params":{}}}"#,
-                            url.replace("weapi", "api"),
+                            r#"{{"method":"POST","url":"{}{}","params":{}}}"#,
+                            DOMAIN,
+                            path,
                             QueryParams::from_map(params).json()
                         );
+                        url = format!("{}{}", DOMAIN, "/api/linux/forward");
                         Crypto::linuxapi(&data)
                     }
-                    CryptoApi::Weapi => {
-                        let mut params = params;
-                        params.insert("csrf_token", &csrf);
-                        Crypto::weapi(&QueryParams::from_map(params).json())
-                    }
                     CryptoApi::Eapi => {
-                        let mut params = params;
-                        params.insert("csrf_token", &csrf);
-                        url = path.to_string();
-                        Crypto::eapi(
-                            "/api/song/enhance/player/url",
-                            &QueryParams::from_map(params).json(),
-                        )
+                        let now = Utc::now().timestamp().to_string();
+                        let cookie_jar = self.cookie_jar();
+                        let cookie_jar = cookie_jar.lock().unwrap();
+                        let mut header_cookie: HashMap<String, String> = cookie_jar
+                            .get_request_values(&format!("{}{}", API_DOMAIN, path).parse().unwrap())
+                            .map(|(key, value)| (key.to_string(), value.to_string()))
+                            .collect();
+                        let key_defaults = HashMap::from([
+                            ("osver", None),
+                            ("deviceId", None),
+                            ("os", None),
+                            ("appver", None),
+                            ("versioncode", Some("140")),
+                            ("mobilename", Some("")),
+                            ("buildver", Some(&now[0..9])),
+                            ("resolution", Some("1920x1080")),
+                            ("channel", None),
+                            ("MUSIC_U", None),
+                            ("MUSIC_A", None),
+                        ]);
+                        header_cookie.remove("__csrf");
+                        for (key, default) in &key_defaults {
+                            match header_cookie.get(*key) {
+                                Some(_) => {}
+                                None if matches!(default, Some(_)) => {
+                                    header_cookie
+                                        .insert((*key).to_string(), String::from(default.unwrap()));
+                                }
+                                None => {}
+                            }
+                        }
+                        if append_csrf {
+                            header_cookie.insert("__csrf".to_string(), csrf.clone());
+                        }
+                        header_cookie.insert("requestId".to_string(), generate_request_id());
+                        headers.append(
+                            "Host",
+                            Url::parse(API_DOMAIN)
+                                .unwrap()
+                                .host_str()
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        );
+                        headers.append("User-Agent", choose_user_agent(ua).parse().unwrap());
+                        headers.append(
+                            "Cookie",
+                            header_cookie
+                                .iter()
+                                .map(|(key, value)| format!("{}={}", key, value))
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                                .parse()
+                                .unwrap(),
+                        );
+
+                        url = format!("{}{}", API_DOMAIN, path);
+                        let mut data = HashMap::from(params);
+                        data.insert("e_r", "False");
+                        let eapi_path = path.replacen("eapi", "api", 1);
+                        Crypto::eapi(&eapi_path, &QueryParams::from_map(data).json())
                     }
                 };
-
-                let request = Request::post(&url)
-                    .header("Cookie", "os=pc; appver=2.7.1.198277")
+                let response = self
+                    .client
+                    .post(url)
+                    .headers(headers)
                     .header("Accept", "*/*")
                     .header("Accept-Language", "en-US,en;q=0.5")
                     .header("Connection", "keep-alive")
                     .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("Host", "music.163.com")
-                    .header("Referer", "https://music.163.com")
-                    .header("User-Agent", user_agent)
-                    .body(body)
-                    .unwrap();
-                let mut response = self
-                    .client
-                    .send_async(request)
+                    .body(encrypted_data)
+                    .send()
                     .await
                     .map_err(|_| anyhow!("none"))?;
                 response.text().await.map_err(|_| anyhow!("none"))
             }
             Method::Get => self
                 .client
-                .get_async(&url)
+                .get(url)
+                .send()
                 .await
                 .map_err(|_| anyhow!("none"))?
                 .text()
@@ -472,33 +552,27 @@ impl MusicApi {
 
     /// 歌曲 URL
     /// ids: 歌曲列表
-    /// br: 歌曲码率
-    ///     l: 128000
-    ///     m: 192000
-    ///     h: 320000
-    ///    sq: 999000
-    ///    hr: 1900000
+    /// level: 歌曲码率等级
+    ///     higher: 较高
+    ///     exhigh: 极高
+    ///     lossless: 无损
+    ///     hires: Hi-Res
+    ///     jyeffect: 高清环绕声
+    ///     sky: 沉浸环绕声
+    ///     dolby: 杜比全景声
+    ///     jymaster: 超清母带
     #[allow(unused)]
-    pub async fn songs_url(&self, ids: &[u64], br: &str) -> Result<Vec<SongUrl>> {
-        // 使用 WEBAPI 获取音乐
-        // let csrf_token = self.csrf.borrow().to_owned();
-        // let path = "/weapi/song/enhance/player/url/v1";
-        // let mut params = HashMap::new();
-        // let ids = serde_json::to_string(ids)?;
-        // params.insert("ids", ids.as_str());
-        // params.insert("level", "standard");
-        // params.insert("encodeType", "aac");
-        // params.insert("csrf_token", &csrf_token);
-        // let result = self
-        //     .request(Method::Post, path, params, CryptoApi::Weapi, "")
-        //     .await?;
-
+    pub async fn songs_url(&self, ids: &[u64], level: &str) -> Result<Vec<SongUrl>> {
         // 使用 Eapi 获取音乐
-        let path = "https://interface3.music.163.com/eapi/song/enhance/player/url";
+        let path = "/eapi/song/enhance/player/url/v1";
         let mut params = HashMap::new();
         let ids = serde_json::to_string(ids)?;
         params.insert("ids", ids.as_str());
-        params.insert("br", br);
+        params.insert("level", level);
+        params.insert("encodeType", "flac");
+        if level == "sky" {
+            params.insert("immerseType", "c51");
+        }
         let result = self
             .request(Method::Post, path, params, CryptoApi::Eapi, "", true)
             .await?;
@@ -820,7 +894,7 @@ impl MusicApi {
     /// limit: 数量
     /// order: 排序方式:
     //	      "hot": 热门，
-    ///        "new": 最新
+    ///       "new": 最新
     /// cat: 全部,华语,欧美,日语,韩语,粤语,小语种,流行,摇滚,民谣,电子,舞曲,说唱,轻音乐,爵士,乡村,R&B/Soul,古典,民族,英伦,金属,朋克,蓝调,雷鬼,世界音乐,拉丁,另类/独立,New Age,古风,后摇,Bossa Nova,清晨,夜晚,学习,工作,午休,下午茶,地铁,驾车,运动,旅行,散步,酒吧,怀旧,清新,浪漫,性感,伤感,治愈,放松,孤独,感动,兴奋,快乐,安静,思念,影视原声,ACG,儿童,校园,游戏,70后,80后,90后,网络歌曲,KTV,经典,翻唱,吉他,钢琴,器乐,榜单,00后
     #[allow(unused)]
     pub async fn top_song_list(
@@ -1006,49 +1080,6 @@ impl MusicApi {
         to_banners_info(result)
     }
 
-    /// 从网络下载图片
-    /// url: 网址
-    /// path: 本地保存路径(包含文件名)
-    /// width: 宽度
-    /// high: 高度
-    #[allow(unused)]
-    pub async fn download_img<I>(&self, url: I, path: PathBuf, width: u16, high: u16) -> Result<()>
-    where
-        I: Into<String>,
-    {
-        if !path.exists() {
-            let url = url.into();
-            let image_url = format!("{}?param={}y{}", url, width, high);
-
-            let mut response = self.client.get_async(image_url).await?;
-            if response.status().is_success() {
-                let mut buf = vec![];
-                response.copy_to(&mut buf).await?;
-                std::fs::write(&path, buf)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// 从网络下载音乐
-    /// url: 网址
-    /// path: 本地保存路径(包含文件名)
-    #[allow(unused)]
-    pub async fn download_song<I>(&self, url: I, path: PathBuf) -> Result<()>
-    where
-        I: Into<String>,
-    {
-        if !path.exists() {
-            let mut response = self.client.get_async(url.into()).await?;
-            if response.status().is_success() {
-                let mut buf = vec![];
-                response.copy_to(&mut buf).await?;
-                std::fs::write(&path, buf)?;
-            }
-        }
-        Ok(())
-    }
-
     /// 用户电台定阅列表
     /// offset: 列表起点号
     /// limit: 列表长度
@@ -1122,22 +1153,48 @@ fn choose_user_agent(ua: &str) -> &str {
     USER_AGENT_LIST[index as usize]
 }
 
+fn generate_request_id() -> String {
+    let now = Utc::now().timestamp_millis();
+
+    let mut rng = rand::rng();
+    let random_num: u32 = rng.random_range(0..1000);
+
+    format!("{}_{:04}", now, random_num)
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
 
-    #[async_std::test]
+    #[tokio::test]
     async fn test() {
-        let api = MusicApi::default();
-        assert!(api.banners().await.is_ok());
-    }
+        let mut api = MusicApi::default();
+        if let Ok(file) = std::fs::File::open("cookies.json").map(std::io::BufReader::new) {
+            api = MusicApi::from_cookie_jar(cookie_store::serde::json::load(file).unwrap(), 0);
+        } else {
+            let _ = api.captcha("".to_string(), "".to_string()).await;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
 
-    fn require_sync<T: Sync>(_: T) {}
-
-    #[async_std::test]
-    async fn music_api_send() {
-        let api = MusicApi::default();
-        require_sync(api);
+            let _ = api
+                .login_cellphone(
+                    "86".to_string(),
+                    "18848441525".to_string(),
+                    input.trim().to_string(),
+                )
+                .await;
+        }
+        // test code
+        // test code
+        {
+            let mut writer = std::fs::File::create("cookies.json")
+                .map(std::io::BufWriter::new)
+                .unwrap();
+            let cookie_jar = api.cookie_jar();
+            let store = cookie_jar.lock().unwrap();
+            cookie_store::serde::json::save(&store, &mut writer).unwrap();
+        }
+        assert!(true);
     }
 }
