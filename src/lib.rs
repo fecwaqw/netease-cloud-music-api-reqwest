@@ -1169,23 +1169,27 @@ mod tests {
 
     #[tokio::test]
     async fn test() {
+        let ctcode = "";
+        let phone = "";
         let mut api = MusicApi::default();
         if let Ok(file) = std::fs::File::open("cookies.json").map(std::io::BufReader::new) {
             api = MusicApi::from_cookie_jar(cookie_store::serde::json::load(file).unwrap(), 0);
         } else {
-            let _ = api.captcha("".to_string(), "".to_string()).await;
+            let _ = api.captcha(ctcode.to_string(), phone.to_string()).await;
             let mut input = String::new();
             std::io::stdin().read_line(&mut input).unwrap();
 
             let _ = api
                 .login_cellphone(
-                    "86".to_string(),
-                    "18848441525".to_string(),
+                    ctcode.to_string(),
+                    phone.to_string(),
                     input.trim().to_string(),
                 )
                 .await;
         }
         // test code
+        println!("{:?}", api.login_status().await);
+        println!("{:?}", api.song_list_detail(5314224419).await);
         // test code
         {
             let mut writer = std::fs::File::create("cookies.json")

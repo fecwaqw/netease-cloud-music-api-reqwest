@@ -289,7 +289,6 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
                     array = get_val!(value, "playlist", "tracks")?;
                 }
                 for v in array.iter() {
-                    let ar: &Vec<Value> = get_val!(v, "ar")?;
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
@@ -312,7 +311,6 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
             Parse::Ucd => {
                 let array: &Vec<Value> = get_val!(value, "data")?;
                 for v in array.iter() {
-                    let duration: u32 = get_val!(v, "simpleSong", "dt")?;
                     vec.push(SongInfo {
                         id: get_val!(v, "songId")?,
                         name: get_val!(v, "songName")?,
@@ -398,7 +396,6 @@ pub fn to_song_info(json: String, parse: Parse) -> Result<Vec<SongInfo>> {
             Parse::Album => {
                 let array: &Vec<Value> = get_val!(value, "songs")?;
                 for v in array.iter() {
-                    let duration: u32 = get_val!(v, "dt")?;
                     vec.push(SongInfo {
                         id: get_val!(v, "id")?,
                         name: get_val!(v, "name")?,
@@ -538,14 +535,12 @@ pub fn to_mix_detail(json: &Value) -> Result<PlayListDetail> {
         }
         let array_privilege: &Vec<Value> = get_val!(value, "privileges")?;
         for (v, p) in array.iter().zip(array_privilege.iter()) {
-            let ar: &Vec<Value> = get_val!(v, "ar")?;
-
             songs.push(SongInfo {
                 id: get_val!(v, "id")?,
                 name: get_val!(v, "name")?,
-                translated_name: get_val!(@as &Vec<Value>, v, "tns")?
-                    .first()
-                    .map(|x| x.to_string()),
+                translated_name: get_val!(@as &Vec<Value>, v, "tns")
+                    .ok()
+                    .map(|x| x.first().unwrap().as_str().unwrap().to_string()),
                 singer: get_val!(@as &Vec<Value>, v, "ar")?
                     .into_iter()
                     .map(|v: &Value| get_val!(v, "name").unwrap_or_else(|_| unk.clone()))
