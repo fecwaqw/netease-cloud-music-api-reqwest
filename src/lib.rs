@@ -1189,7 +1189,7 @@ mod tests {
         }
         // test code
         println!("{:?}", api.login_status().await);
-        println!("{:?}", api.song_list_detail(5314224419).await);
+        println!("{:?}", api.songs_url(&[29444040], "lossless").await);
         // test code
         {
             let mut writer = std::fs::File::create("cookies.json")

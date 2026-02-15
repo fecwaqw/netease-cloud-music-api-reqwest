@@ -174,6 +174,8 @@ pub struct SongUrl {
     pub id: u64,
     /// 歌曲 URL
     pub url: String,
+    /// 歌曲文件扩展名
+    pub extension: String,
     /// 码率
     pub rate: u32,
 }
@@ -187,10 +189,12 @@ pub fn to_song_url(json: String) -> Result<Vec<SongUrl>> {
         let array: &Vec<Value> = get_val!(value, "data")?;
         for v in array.iter() {
             let url: String = get_val!(v, "url").unwrap_or_default();
+            let extension: String = get_val!(v, "type").unwrap_or_default();
             if !url.is_empty() {
                 vec.push(SongUrl {
                     id: get_val!(v, "id")?,
                     url,
+                    extension,
                     rate: get_val!(v, "br")?,
                 });
             }
