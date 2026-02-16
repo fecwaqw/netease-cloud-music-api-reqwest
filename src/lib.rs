@@ -12,7 +12,6 @@ use cookie_store::CookieStore;
 use encrypt::Crypto;
 use lazy_static::lazy_static;
 pub use model::*;
-use rand::Rng;
 use regex::Regex;
 use reqwest::{self, header::HeaderMap, Client};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -1155,9 +1154,7 @@ fn choose_user_agent(ua: &str) -> &str {
 
 fn generate_request_id() -> String {
     let now = Utc::now().timestamp_millis();
-
-    let mut rng = rand::rng();
-    let random_num: u32 = rng.random_range(0..1000);
+    let random_num: u32 = rand::random_range(0..1000);
 
     format!("{}_{:04}", now, random_num)
 }

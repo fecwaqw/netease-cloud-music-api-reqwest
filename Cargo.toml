@@ -12,7 +12,7 @@ urlqstring = "*"
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
 rand = "~0.9"
-openssl = "*"
+openssl = { version = "*", features = ["vendored"] }
 anyhow = "*"
 hex = "*"
 base64 = "*"
